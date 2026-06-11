@@ -1,0 +1,69 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 1. טבלת עסקים
+model Business {
+  id                  String         @id @default(uuid())
+  name                String
+  phoneNumber         String         @unique // מספר הטלפון הראשי של העסק לזיהוי שיחות
+  slotDurationMinutes Int            @default(30) // אורך תור ברירת מחדל בדקות
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  
+  // קשרים לטבלאות אחרות
+  businessHours       BusinessHours[]
+  customers           Customer[]
+  appointments        Appointment[]
+}
+
+// 2. טבלת שעות פעילות של העסק
+model BusinessHours {
+  id         String   @id @default(uuid())
+  businessId String
+  dayOfWeek  Int      // 0 = ראשון, 1 = שני... 6 = שבת
+  openTime   String   // פורמט "09:00"
+  closeTime  String   // פורמט "18:00"
+  
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, dayOfWeek]) // מונע הגדרה כפולה של אותו יום באותו עסק
+}
+
+// 3. טבלת לקוחות
+model Customer {
+  id          String   @id @default(uuid())
+  businessId  String
+  fullName    String
+  phoneNumber String   // מספר הטלפון של הלקוח - קריטי לזיהוי אוטומטי בטלפון
+
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@unique([businessId, phoneNumber]) // מונע כפל לקוח עם אותו טלפון באותו עסק
+}
+
+// 4. טבלת תורים
+model Appointment {
+  id         String            @id @default(uuid())
+  businessId String
+  customerId String
+  startTime  DateTime          // תאריך ושעת תחילת התור
+  endTime    DateTime          // שעת סיום התור (מחושבת אוטומטית)
+  status     AppointmentStatus @default(CONFIRMED)
+  createdAt  DateTime          @default(now())
+
+  business   Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer   Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+}
+
+// סטטוסים אפשריים לתור
+enum AppointmentStatus {
+  CONFIRMED
+  CANCELLED
+}
