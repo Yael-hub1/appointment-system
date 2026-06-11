@@ -1,0 +1,115 @@
+Functional Design Document (FDD) – Appointment Scheduling System
+
+++++++++++ Database Schema ++++++++++
+
+The database runs on PostgreSQL (via Neon) and has 4 main tables that connect to each other:
+
+A. User / Customer Table
+Represents the clients who can book appointments in the system.
+
+id (String, Primary Key) – Unique ID for the customer (for example: "shira1", "tamar1").
+
+Optional fields: email, name.
+
+B. Business Table
+Represents the shops or service providers that get the appointments.
+
+id (String, Primary Key) – Unique ID for the business (for example: "biz1").
+
+name (String) – The name of the business.
+
+C. BusinessHours Table
+Sets the time frame when the business is open (used to calculate slots).
+
+id (String, Primary Key) – Automatic ID for the row.
+
+businessId (String, Foreign Key) – Connected to the Business table.
+
+dayOfWeek (Int) – Day of the week (0-6).
+
+openTime / closeTime (String) – Opening and closing hours.
+
+D. Appointment Table
+The dynamic table that holds all actual bookings and runs the prevention rules.
+
+id (String, Primary Key) – Automatic unique ID for each appointment (UUID / Cuid).
+
+startTime (DateTime) – The start time of the appointment (always saved in UTC, for example: 2026-06-15T10:00:00.000Z).
+
+endTime (DateTime) – The end time of the appointment (calculated as 30 minutes after the start time).
+
+businessId (String, Foreign Key) – Connected to the Business table (which business the appointment is for).
+
+customerId (String, Foreign Key) – Connected to the User/Customer table (which client booked the appointment).
+
+
+++++++++++ Backend Components ++++++++++
+
+The system uses the NestJS Framework. It has two main parts (Modules) and one global database service.
+
+A. Prisma Module & Service (Database Infrastructure)
+A global component that connects directly to the database (Neon PostgreSQL) using Prisma Client.
+
+What it does: It starts the connection and lets all other services in the system make safe database changes (CRUD operations).
+
+B. Appointments Module (Appointment Management)
+The main part of the system. It handles all the business logic for times, checking for duplicate appointments, and blocking double-bookings. It is split into a Controller (outside communication) and a Service (logic):
+
+🔹 Appointments Controller (API Endpoints)
+Manages the API routes and gets requests from the outside world (testing tools or the future Frontend):
+
+GET /appointments/slots – Gets businessId and dateStr from the Query parameters and returns the free time slots.
+
+POST /appointments/book – Gets a JSON object in the Request Body containing businessId, customerId, and time, and asks to create a new appointment.
+
+🔹 Appointments Service (Business Logic)
+The "brain" of the application. It includes these functions:
+
+getAvailableSlots(businessId, dateStr)
+
+Goal: Calculate and return a list of free times for a specific day.
+
+How it works: It gets the working hours of the business, gets all existing appointments for that day in UTC, creates a loop of time slots every 30 minutes (from 09:00 to 17:00), and removes (using .some()) the hours that are already taken in the database.
+
+createAppointment(businessId, customerId, timeStr)
+
+Goal: Check if the time is valid and create a new appointment in the database.
+
+How it works: 1. It creates a standardized date object in UTC format (based on the date 2026-06-15).
+2. Customer Double-Booking Check: It checks the database to see if this customerId already has an appointment on that same day. If yes, it throws a BadRequestException (400).
+3. Business Double-Booking Check: It checks the database to see if the requested startTime is already taken for this businessId. If yes, it throws a BadRequestException (400).
+4. Creation: If both checks pass, it saves the new appointment in the table and returns the created appointment object.
+
+++++++++++ Future Scope and Planned Protections: ++++++++++
+
+1. Dynamic Date Handling
+The current problem: Right now, the target date in the code is hardcoded to one specific day (2026-06-15).
+
+The fix in the Service: We will change the functions so they get the date parameter dynamically from the Frontend.
+
+The fix in the DB: No changes needed in the tables, because Prisma's DateTime format automatically supports any date and time you enter.
+
+2. Past Time Validation
+Why we need it: To stop a customer from opening the system at 14:00 (2:00 PM) and successfully booking an appointment for 09:00 AM on that same day.
+
+The logic in createAppointment: Before the regular checks, we will add an if statement that compares the requested time to the server's current time (new Date()). If the requested time is in the past, the request is automatically blocked with a BadRequestException.
+
+3. Dynamic Duration
+Why we need it: Right now, every appointment is automatically set to last 30 minutes. In the future, businesses will want to offer different services (for example: Haircut = 30 min, Hair Coloring = 90 min).
+
+The fix in the DB: We will add a Service table connected to the business. Inside it, every service will have a duration field (in minutes). The Appointment table will then connect to a serviceId.
+
+The logic in the Service: Calculating the endTime will no longer be hardcoded (+ 30 * 60 * 1000). Instead, it will be calculated dynamically based on the length of the chosen service.
+
+4. Overlap Protection
+Why we need it: Once appointment lengths become dynamic, a simple check (asking if the time exactly equals startTime) will not be enough. We must stop a long appointment from overlapping into another appointment.
+
+The logic in the Service: The Prisma check query will change to a range check (Overlap):
+
+TypeScript
+// Pseudo-code for overlap check: a new appointment cannot start before a previous one ends
+startTime < existing.endTime && endTime > existing.startTime
+5. Cancellation Policy
+Why we need it: To protect the business owner from clients who cancel an appointment five minutes before it starts.
+
+The logic in the API: Creating a DELETE /appointments/:id endpoint that allows canceling an appointment only if the difference between the current time and the appointment's startTime is greater than 24 hours (or another custom business setting).
